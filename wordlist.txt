@@ -1,0 +1,13 @@
+index.html
+login.html
+admin.html
+upload.html
+robots.txt
+secret.txt
+backup/
+admin/
+config.php
+db.php
+backup.zip
+.htaccess
+test
