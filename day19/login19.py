@@ -13,7 +13,7 @@ headers = {
 # 登录
 data = urllib.parse.urlencode({
     "username": "qzl",
-    "password": "websec124"
+    "password": "websec123"
 }).encode()
 
 req = urllib.request.Request("http://127.0.0.1:9000/login", data=data, headers=headers)
