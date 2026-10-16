@@ -14,6 +14,7 @@ Linux → 计算机网络 → HTTP → Web 基础（HTML/JS）→ Python → Web
 |---|---|
 | [`day18/`](day18/) | 字典爆破目录扫描脚本（Python + urllib） |
 | [`day19/`](day19/) | Python POST 登录 + 会话保持（CookieJar） |
+| [`day20/`](day20/) | 本地靶场（LAMP + DVWA）+ 反射型 XSS |
 
 ## 学习进度
 
@@ -21,6 +22,7 @@ Linux → 计算机网络 → HTTP → Web 基础（HTML/JS）→ Python → Web
 |---|---|---|
 | 18 | 字典文件 + 目录爆破雏形 | [`day18/dirscan.py`](day18/dirscan.py) |
 | 19 | Python 发带数据的请求 + 会话（CookieJar） | [`day19/login19.py`](day19/login19.py) |
+| 20 | 本地靶场（LAMP/DVWA）+ 反射型 XSS | [`day20/README.md`](day20/README.md) |
 
 （以后每学完一天，就在这里加一行）
 
