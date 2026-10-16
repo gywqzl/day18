@@ -615,6 +615,85 @@ for c in jar:                            # 想确认"我到底有没有票"，�
 
 ---
 
+## Day 20 · 搭靶场（LAMP + DVWA）+ XSS 术语卡
+
+### 一个网站的四件套（LAMP）
+
+| 角色 | 真名（英文全称） | 干什么 | 你手搓过的「迷你版」 |
+|---|---|---|---|
+| **L**inux | — | 操作系统 | 你的 WSL Ubuntu |
+| **A**pache | Apache HTTP Server（HTTP 服务器） | 收 HTTP 请求 / 送文件 / 决定交给谁处理 | `python3 -m http.server 8080` |
+| **P**HP | PHP: Hypertext Preprocessor（超文本预处理器） | 跑在**服务器上**的语言，动态生成 HTML | `echo_server.py`（接住表单、吐回 HTML） |
+| **M**ariaDB | MariaDB（MySQL 的开源分支，关系数据库） | 存数据、按条件查、关机能留下 | Day 19 靶场里那个 `SESSIONS = {}` 字典 |
+
+- **Apache 和 PHP 是「两家」**：Apache 只会读文件、发文件，**看不懂** `<?php ?>`；PHP 不会听网络、不会发响应。中间的桥 = **`libapache2-mod-php`**（拆词：`lib` 库 + `apache2` + `mod` 模块 + `php`）。
+- **不装桥的后果**：`.php` 被当**普通文本**发出去 → **源码泄露**（攻击者能读到 `config.inc.php` 里的数据库账号密码、隐藏路径）。
+
+### 搭建 / 服务管理命令
+
+| 命令 | 干什么 | 英文全称 | 记忆钩子 | 示例 |
+|---|---|---|---|---|
+| `sudo apt install -y apache2 mariadb-server php libapache2-mod-php php-mysql` | 装网站三件套 + 桥 | apt = Advanced Package Tool | 「apt 就是 Linux 的软件商店」 | 装完 80/3306 才有服务 |
+| `sudo systemctl enable --now apache2 mariadb` | 启动服务 + 设为开机自启 | system control | `enable`=把开关打开（自启）；`--now`=顺便现在就起 | 一行同时管两个服务 |
+| `systemctl is-active apache2` | 问「活着吗」 | is-active | 回答只有 `active` / `inactive` | 最省事的健康检查 |
+| `sudo ss -tlnp` | 看谁在听哪些端口（含程序名） | ss = socket statistics | `-t` TCP / `-l` listen 听 / `-n` 不查名字 / `-p` process 进程 | **不加 sudo 只看得到自己的进程** |
+| `curl -I 网址` | 只要响应头 | `-I` = head | 「只看门牌，不看屋里」 | `curl -I http://localhost/` |
+| `ls -l /var/log/apache2/` | 看有哪些日志、谁在写 | log = 日志 | **先认准是哪本账本** | access.log / error.log |
+| `tail -n 3 文件` | 看最后 3 行 | tail = 尾巴 | head 是头、tail 是尾 | `tail -n 3 access.log` |
+
+### Apache 访问日志一行 = 9 段（combined 格式）
+
+```
+::1 - - [16/Oct/2026:17:07:20 +0800] "GET /dvwa/vulnerabilities/xss_r/?name=xxx HTTP/1.1" 200 1876 "http://.../?name=%3Cimg..." "Mozilla/5.0 ..."
+ ①    ②③  ④                            ⑤                                        ⑥   ⑦    ⑧                     ⑨
+```
+
+| # | 是什么 | 人话 |
+|---|---|---|
+| ① | 客户端 IP | `::1` = **IPv6 版的 127.0.0.1**（本机来的）；`0.0.0.0` 不会出现在这儿 |
+| ②③ | `-` `-` | 没启用认证时的占位 |
+| ④ | 时间戳 | `+0800` = 东八区 |
+| ⑤ | **请求行** | Day 10 学的请求行；参数是**浏览器自动 URL 编码**后的样子（Day 12） |
+| ⑥⑦ | 状态码 / 字节数 | 200 / 1876 |
+| ⑧⑨ | **Referer / User-Agent** | Day 11 学的两个「请求头」，真身现身 |
+
+> 💡 日志 = 防守方唯一的现场：别人打了什么 payload、从哪来、成没成，全在里面（Day 7 学的 `grep`/`sort`/`uniq` 就是用在这儿）。
+
+### XSS 术语卡（Day 20 补上的定义）
+
+- **全称 Cross-Site Scripting（跨站脚本）**；缩写本该是 CSS，但被 **C**ascading **S**tyle **S**heets 占了 → 改写成 **X**SS。
+- **定义（人话）**：攻击者把自己写的代码塞进网页，让**受害者的浏览器**去执行它。（PHP 在**服务器**上跑；XSS 的代码在**受害者机器**上跑。）
+- **三角色**：攻击者（提供那串"像值其实是代码"的输入）/ 网站（把输入当**内容**收下、又当**代码**吐出去）/ 受害者（浏览器真正执行代码的人）。
+- **危害**：借用受害者身份与 Cookie → 读页面内容 / 代发请求 / 偷 `PHPSESSID`（除非 `HttpOnly`）/ 篡改页面做钓鱼。
+- **三种类型**：**Reflected** 反射型（payload 在请求/URL 里，服务器当场原样吐回，**要骗人点链接**）/ **Stored** 存储型（payload 存进数据库，谁看谁中，**最狠**）/ **DOM 型**（服务器没参与，浏览器端 JS 自己把输入写进页面）。
+- **一句话总纲**：**用户输入被当「代码」执行了**（与 SQL 注入同族）。
+
+### 判据：这洞是「服务器端」还是「浏览器端」出的？
+
+- **右键 → 查看网页源代码（Ctrl+U）里就能看到 payload** → 服务器把它拼进了 HTML（Reflected / Stored）
+- **只有 F12 → Elements 里有、Ctrl+U 里没有** → 是 JS 事后塞进去的（DOM 型）
+
+### DVWA 快速上手
+
+| 事项 | 内容 |
+|---|---|
+| 网址 | `http://localhost/dvwa/setup.php` → 点 **Create / Reset Database** |
+| 默认账号 | `admin` / `password` |
+| 安全级别 | 左侧 **DVWA Security**：Low / Medium / High / Impossible = **同一段代码的四种写法**（Low 完全不设防 → Impossible 终于写对了） |
+| 起步姿势 | 每个模块先 Low，看懂了再往上调，观察**防护加在哪一层** |
+
+### ⚠️ 坑
+
+- **3306 = MySQL / MariaDB 的默认端口**（别答"不知道"）：80=HTTP、443=HTTPS、22=SSH、3306=数据库。
+- **`ss -tlnp` 看不到程序名 = 缺 `sudo`**：`-p` 要拿别人的 socket 属主信息，得 root。**自己的进程**（如 `python3` 占的 9000）不看 sudo 也看得见。
+- **日志文件名别认错**：默认站点写在 **`access.log`**；`other_vhosts_access.log` 可能是 0 字节（空的）。
+- **DVWA 默认级别是 `impossible`**（严格转义）：同一串 payload，impossible 下 `<` 变 `&lt;`、**不弹窗**；切 **Low** 才原样反射 → 这就是「防御加在输出层」的活教材。
+- **`alert(Qzl)` 不弹**：JS 里不带引号的 `Qzl` 是个**变量名** → `ReferenceError: Qzl is not defined`。名字要加引号：`<img src=x onerror="alert('Qzl')">`（外层双引号、内层单引号）。
+- **弹窗没出现 ≠ 没执行**：payload 可能跑了、只是自己报错。**真相在 F12 → Console**。
+- **`r.headers["打错的名字"]` 和 `r.headers["这响应本来就没有的头"]` 都返回 `None`**，长得一模一样、单看分不出 → 这就是「静默失败」的本质。
+
+---
+
 ## 🧩 常用组合拳（跨 Day 复用）
 
 | 场景 | 命令 |
@@ -644,3 +723,10 @@ for c in jar:                            # 想确认"我到底有没有票"，�
 | **确认"我到底有没有拿到票"** | `for c in jar: print(c.name, c.value)`（比看 `Set-Cookie` 响应头可靠：头是"公告"，罐子才是"真的存下来了"） |
 | **从正文里挑出想要的那一行** | `body = p.read().decode("utf-8")` → `for line in body.splitlines():` → `if "关键字" in line: print(line)` |
 | **先 GET 再 POST（真实站点常见）** | 带 CSRF token 的表单：先 `opener.open(Request(登录页))` 拿页面 → 从 HTML 里解析出 token → 再 `POST` 带上（Day 20+ 靶场练） |
+| **起一个本地 DVWA 靶场**（只在本机打） | `bash ~/day20/setup_dvwa.sh` → 浏览器 `http://localhost/dvwa/setup.php` → Create/Reset Database → `admin` / `password` |
+| **查某端口是谁在听** | `sudo ss -tlnp \| grep -E ':80\|:3306'`（**不加 sudo 只看得到自己的进程**） |
+| **验证 Web 服务活着** | `curl -I http://localhost/`（看 `HTTP/1.1 200 OK` + `Server: Apache/2.4.66`） |
+| **看别人往你站上打了什么** | `tail -n 5 /var/log/apache2/access.log`（认准 `access.log`，不是 `other_vhosts_access.log`） |
+| **把日志里的 payload 解码看清** | `python3 -c "from urllib.parse import unquote_plus; print(unquote_plus('%3Cimg+src%3Dx+onerror%3Dalert%281%29%3E'))"` → `<img src=x onerror=alert(1)>` |
+| **DVWA 里复现反射型 XSS** | `DVWA Security` 设 **Low** → `XSS (Reflected)` → 输入 `<img src=x onerror="alert('Qzl')">` |
+| **LAMP 环境体检三连** | `systemctl is-active apache2 mariadb` → `sudo ss -tlnp \| grep -E ':80\|:3306'` → `curl -I http://localhost/` |
