@@ -424,6 +424,43 @@ print("发现", count, "个存在的路径")        # 循环【外】报总数
 
 ---
 
+## Day 18 延伸 · 异常分类（为什么脚本会崩）
+
+> 背景：靶子服务没开时 `dirscan.py` 抛 `URLError: [Errno 111] Connection refused` **当场崩溃**——因为只写了 `except HTTPError`，兜不住。
+
+| 错误类型 | 中文 | 什么时候发生 | 服务器回话了吗 | 关键属性 |
+|---|---|---|---|---|
+| `urllib.error.HTTPError` | HTTP 错误 | 回话了，但状态码是 **4xx/5xx**（404 / 403 / 500） | ✅ 回了 | `e.code` = 状态码 |
+| `urllib.error.URLError` | URL 错误 | **压根没连上**（Connection refused / DNS 解析失败 / 超时） | ❌ 没回 | `e.reason` = 原因 |
+
+**记忆钩子**：**HTTP**Error = 敲了门**见到了人**；**URL**Error = 敲了门**谁也没见着**。
+
+**等级关系（反直觉，必记）**：`HTTPError` 是 `URLError` 的**子类** → 只写 `except HTTPError` 抓不到 `URLError`（**抓儿子抓不到爸爸**）。
+
+### 正确写法（两类分开捕获）
+
+```python
+import urllib.request
+import urllib.error                      # ← 容易漏，必须单独 import
+
+try:
+    r = urllib.request.urlopen(url)
+    print("[200] 存在")
+except urllib.error.HTTPError as e:      # 服务器回话了，但状态码是 4xx/5xx
+    print(f"[{e.code}] 有回话但被拒/没找到")   # e.code = 403 / 404 → 可把 403 与 404 分开
+except urllib.error.URLError as e:       # 压根没连上
+    print(f"[连不上] {e.reason}")
+```
+
+### ⚠️ 坑
+
+- **只 `except HTTPError` 挡不住"服务器没开"** → 脚本当场崩。开工先点靶子，并用 `curl -I http://localhost:8000/` 验证（预期 200）。
+- **`pass` 会把 403 一起吞掉**：403 = **存在但被拒绝访问**（"有防护"的信号，渗透里是重点线索），不能当"不存在"，更不能静默丢弃 → 用 `e.code` 单列一类。
+- **`404` 静默跳过可以接受**，但报告里要写清"扫了 N 条、存在 M 条"。
+- **服务器的本质是一个运行中的进程**：关掉那个终端，服务就跟着死了（对应 Day 8 进程知识）。
+
+---
+
 ## Day 18 延伸 · Git / GitHub（把代码传上网）
 
 ### 为什么要有 git（一句话）
@@ -501,6 +538,83 @@ To https://github.com/用户名/仓库名.git
 
 ---
 
+## Day 19 · Python 发「带数据」的请求 + 让脚本记住身份（会话）
+
+### 核心概念
+
+| 词 | 英文全称 | 中文 | 记忆钩子 |
+|---|---|---|---|
+| `Request` | request | **请求对象**：把 `url + 请求头 + 数据` 打包成一个请求 | **URL 只说"去哪"，Request 才说"这一整个请求"** |
+| `urlencode` | URL + encode | 把字典拼成 `a=1&b=2`，顺手做 **% 转义** | 按表单规矩"排版"（= Day 12 的 % 编码自动版） |
+| `.encode()` | encode | **文字 → 字节**（`bytes`） | `decode()` 的反向；**网络只运字节** |
+| `CookieJar` | cookie + jar | **饼干罐**（存 Cookie 的容器） | = `curl -c jar.txt`，只是存内存里 |
+| `HTTPCookieProcessor` | Processor | 「**会揣罐子的手**」：自动存票 / 自动带票 | 装到快递员身上 |
+| `build_opener` | build + opener | **组装一个属于你的**发送器 | 官方那个（urlopen）**不记事** |
+| `opener.open(...)` | — | 用**你这个**发送器发请求 | **对象.方法**（`urllib.request.opener` 不存在！） |
+
+### 三件套（一次装好，此后全自动）
+
+```python
+import urllib.request, urllib.parse, http.cookiejar
+jar = http.cookiejar.CookieJar()                                        # ① 饼干罐
+opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))  # ② 装好手的快递员
+opener.open(req)        # ③ 之后所有请求都用它 → 自动存 Cookie / 自动带 Cookie
+```
+
+### 发一个「完整请求」（POST 登录）
+
+```python
+post = urllib.parse.urlencode({"username": "qzl", "password": "websec123"}).encode()  # 拼 + 转义 + 变字节
+req = urllib.request.Request("http://127.0.0.1:9000/login", data=post,
+                             headers={"User-Agent": "Qzl-Scanner/1.0"})
+with opener.open(req) as r:
+    body = r.read().decode("utf-8")      # read()=字节 → decode()=文字（**这就是正文**，到此为止）
+    print("状态码", r.status)             # print 各段之间必须有【逗号】
+    print(r.headers["Set-Cookie"])       # 服务器发的原始 Cookie 头
+for c in jar:                            # 想确认"我到底有没有票"，看罐子最准
+    print(c.name, c.value)
+```
+
+### `urlopen` vs `opener.open`（今天的核心对比）
+
+| | `urllib.request.urlopen(req)` | `opener.open(req)` |
+|---|---|---|
+| 谁去送 | 官方预置的默认发送器 | 你亲手组装、**装了饼干罐**的那个 |
+| 记不记得你是谁能 | ❌ **不记得**，每次都当新客人（HTTP 无状态） | ✅ 记得：票自动存、自动带 |
+| 结果 | 登录成功后去 `/admin` → **403**（两手空空） | 去 `/admin` → **200**（自动带票） |
+
+### 请求头 vs 请求体（今天最关键的区分）
+
+| 位置 | 装什么 | 例子 | GET / POST 差别 |
+|---|---|---|---|
+| **请求头** | 身份 + 附加说明 | `Cookie`、`User-Agent`、`Host` | **都有**，跟方法无关 |
+| **请求体 body** | **数据** | `username=qzl&password=...` | **只有 POST 才有** |
+
+> 一句话：**只有"数据"才分 GET（放 URL）/ POST（放 body）；"身份"永远在请求头里，每个请求都带。**
+
+### 状态码补充（401 / 403 / 405）
+
+| 码 | 人话 | 今天哪见过 |
+|---|---|---|
+| **401** Unauthorized | 「你是谁？**我不认识你**」（**认证**没通过） | 密码写错 → 401 |
+| **403** Forbidden | 「我知道你是谁，**但你不能进**」（认证过了，权限/票不够） | 不带 Cookie 访问 `/admin` |
+| **405** Method Not Allowed | **路径存在，但不收这种请求方式**（探测接口时很有用） | POST 打 `/admin`（它只收 GET） |
+
+### ⚠️ 坑
+
+- **`data=` 必须是 bytes**：`urlencode()` 给的是 **str** → 少了 `.encode()` 报 `TypeError: POST data should be bytes, an iterable of bytes, or a file object. It cannot be of type str`。
+  - 括号位置：`urlencode({...}).encode()` ✅ / `urlencode({...}.encode())` ❌（AttributeError）
+- **`urllib.request.opener(...)` 不存在** → `AttributeError: module 'urllib.request' has no attribute 'opener'`。`opener` 是你自己造的**变量**：**对象.方法** `opener.open(req)`；**模块.工具** `urllib.request.build_opener(...)`。
+- **`cookie=jar` 不是 `open()` 的参数**：罐子是**装在快递员身上**的（build_opener 那步），不用每次手动递。
+- **`r.headers["不存在的头"]` 不报错，而是静默返回 `None`** ← **比报错危险**：脚本"跑通"了但结果全错。响应头里通常只有 `Server / Date / Content-Type / Content-Length`。**该有值却拿到 `None` 时，先怀疑"我读错地方了"。**
+- **字符串不能用 `["名字"]` 取**：`body["内部暗号"]` → `TypeError: string indices must be integers, not 'str'`。方括号两义：**按名字取**（字典 / 响应头）/ **按位置取**（字符串、列表：`body[0]`、`body[0:5]`、`body.find("x")`）。
+- **`read().decode()` 的结果本身就是正文**：再加 `.body` → `AttributeError: 'str' object has no attribute 'body'`（与 Day 16 `.value` 用在 `<h1>/<p>` **同族**：对象有哪些零件取决于它是什么类型）。
+- **`print("文字" 变量)` 缺逗号** → `SyntaxError`（**Day 17 坑复发**）：正确 `print("文字", 变量)`。
+- **令牌（session）别硬编码、别外传**：① 服务器每次都发新票，硬编码根本走不通 ② 票 = 身份，泄漏 = **会话劫持**。
+- **票是 POST 登录成功才发的**：本靶场 `GET /` 的响应头里**没有** `Set-Cookie`；真实站点若在 GET 时就发（匿名会话 / CSRF 关联），你不先 GET 就会**少一块饼干** —— 是否被拒要**实测**。
+
+---
+
 ## 🧩 常用组合拳（跨 Day 复用）
 
 | 场景 | 命令 |
@@ -525,3 +639,8 @@ To https://github.com/用户名/仓库名.git
 | **把改动传给 GitHub**（日常三步） | `git add 文件 && git commit -m "说明" && git push` |
 | **首次把本地文件夹发布成 GitHub 仓库** | VS Code → 源代码管理（Ctrl+Shift+G）→ 左下角**账户图标先登录 GitHub** → 「发布分支」→ 选 `Publish to GitHub public repository` → 浏览器 Authorize（**全程免 token**） |
 | **上传前自查（防泄密）** | `git status` 看要传什么 + `git ls-files` 看已跟踪什么 → 确认无密码/Token/隐私 |
+| **Python 发 POST 表单（登录）** | `post = urllib.parse.urlencode({"username":"qzl","password":"websec123"}).encode()` → `req = urllib.request.Request(url, data=post, headers=headers)` |
+| **Python 自动保持登录（会话）** | `jar = http.cookiejar.CookieJar()` → `opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))` → 之后**所有**请求一律 `opener.open(req)`（自动存票/带票） |
+| **确认"我到底有没有拿到票"** | `for c in jar: print(c.name, c.value)`（比看 `Set-Cookie` 响应头可靠：头是"公告"，罐子才是"真的存下来了"） |
+| **从正文里挑出想要的那一行** | `body = p.read().decode("utf-8")` → `for line in body.splitlines():` → `if "关键字" in line: print(line)` |
+| **先 GET 再 POST（真实站点常见）** | 带 CSRF token 的表单：先 `opener.open(Request(登录页))` 拿页面 → 从 HTML 里解析出 token → 再 `POST` 带上（Day 20+ 靶场练） |
